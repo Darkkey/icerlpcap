@@ -4,16 +4,10 @@ static const int max_intf = 32;
 static const char _str_NULL[] = "NULL";
   
 pcap_t *devHandler = NULL;  
+bpf_u_int32 mask;
+bpf_u_int32 net;
 
-#pragma comment(lib, "C:\\Tools\\WpdPack\\Lib\\x64\\wpcap.lib")
-
-int foo(int x){
-	return 1 - x;
-}
-
-int bar(int y){
-	return y + 1;
-}
+#pragma comment(lib, "wpcap.lib")
 
 static ERL_NIF_TERM lookup_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])  
 {  
@@ -25,7 +19,7 @@ static ERL_NIF_TERM lookup_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv
   
   
     if (pcap_findalldevs_ex("rpcap://", NULL /* auth is not needed */, &alldevs, errbuf) == -1)  
-        return enif_make_string(env, errbuf, ERL_NIF_LATIN1);  
+		return enif_make_tuple(env, 2, enif_make_atom(env, "error"), enif_make_string(env, errbuf, ERL_NIF_LATIN1));
   
 
     for(d = alldevs; d != NULL && i < max_intf; d= d->next, i = i + 1)  
@@ -34,44 +28,16 @@ static ERL_NIF_TERM lookup_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv
 		
 		sprintf_s(str, sizeof(str), "%d. %s (%s)", i + 1, d->description, d->name);
 
-		terms = enif_make_list_cell(env, enif_make_atom(env, str), terms);		
+		terms = enif_make_list_cell(env, 
+			enif_make_tuple(env, 2, 
+				enif_make_string(env, d->name, ERL_NIF_LATIN1),
+				enif_make_string(env, d->description, ERL_NIF_LATIN1))			
+			, terms);
     }  
   
     pcap_freealldevs(alldevs);  
 	return terms;
 }  
-
-
-static ERL_NIF_TERM lookup_device_name_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])  
-{  
-    int i = 1;  // shift + 1 (erlang lists starts from 1, but C from 0)
-	int n = 1;
-
-    char errbuf[PCAP_ERRBUF_SIZE];  
-    pcap_if_t *alldevs;  
-    pcap_if_t *d; 
-
-	ERL_NIF_TERM _term = enif_make_string(env, "invalid interface index", ERL_NIF_LATIN1);  
-
-	if (!enif_get_int(env, argv[0], &n)) {
-		return enif_make_badarg(env);
-    }
-		
-    if (pcap_findalldevs_ex("rpcap://", NULL /* auth is not needed */, &alldevs, errbuf) == -1)  
-        return enif_make_string(env, errbuf, ERL_NIF_LATIN1);  
-  
-
-    for(d = alldevs; d != NULL && i < max_intf; d= d->next, i = i + 1)  
-    {  
-		if(i == n){
-			_term = enif_make_string(env, d->name, ERL_NIF_LATIN1);
-		}
-    }  
-  
-    pcap_freealldevs(alldevs);  
-
-	return _term;
-} 
 
 static ERL_NIF_TERM opendevice_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])  
 {  
@@ -81,10 +47,11 @@ static ERL_NIF_TERM opendevice_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
 	if (!enif_get_string (env, argv[0], device, sizeof(device), ERL_NIF_LATIN1)) {
 		return enif_make_badarg(env);
     }
-	
-  
-    //memset(errbuf, 0, PCAP_ERRBUF_SIZE);  
-    /* return enif_make_string(env, dev); */  
+
+	if (pcap_lookupnet(device, &net, &mask, errbuf) == -1) {
+		net = 0;
+		mask = 0;
+	}
   
     /* Parms: dev,snaplen,promisc,timeout_ms,errbuf 
      * to_ms=0 means wait enough packet to arrive. 
@@ -93,30 +60,8 @@ static ERL_NIF_TERM opendevice_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM 
     if(devHandler != NULL)  
         return enif_make_atom(env, "ok");  
     else  
-        return enif_make_string(env, errbuf, ERL_NIF_LATIN1);  
+		return enif_make_tuple(env, 2, enif_make_atom(env, "error"), enif_make_string(env, errbuf, ERL_NIF_LATIN1));
 }  
-
-
-
-static ERL_NIF_TERM foo_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
-{
-    int x, ret;
-    if (!enif_get_int(env, argv[0], &x)) {
-	return enif_make_badarg(env);
-    }
-    ret = foo(x);
-    return enif_make_int(env, ret);
-}
-
-static ERL_NIF_TERM bar_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
-{
-    int y, ret;
-    if (!enif_get_int(env, argv[0], &y)) {
-	return enif_make_badarg(env);
-    }
-    ret = bar(y);
-    return enif_make_int(env, ret);
-}
 
 static ERL_NIF_TERM capture_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])  
 {  
@@ -136,17 +81,45 @@ static ERL_NIF_TERM capture_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM arg
 		enif_alloc_binary(bin.size, &bin);  
         memcpy(bin.data, _str_NULL, bin.size);  
     }  
-    return enif_make_binary(env, &bin);  
+	return enif_make_tuple(env, 2, enif_make_atom(env, "ok"), enif_make_binary(env, &bin));
 }  
 
+static ERL_NIF_TERM setfilter_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+	char err_str[1024];
+	char filter_exp[1024];
+	struct bpf_program fp;
+
+	if (!enif_get_string(env, argv[0], filter_exp, sizeof(filter_exp), ERL_NIF_LATIN1)) {
+		return enif_make_badarg(env);
+	}
+
+	if (pcap_compile(devHandler, &fp, filter_exp, 0, net) == -1) {
+		sprintf_s(err_str, sizeof(err_str), "Couldn't parse filter %s: %s\n", filter_exp, pcap_geterr(devHandler));
+		return enif_make_tuple(env, 2, enif_make_atom(env, "error"), enif_make_string(env, err_str, ERL_NIF_LATIN1));
+	}
+
+	if (pcap_setfilter(devHandler, &fp) == -1) {
+		sprintf_s(err_str, sizeof(err_str), "Couldn't install filter %s: %s\n", filter_exp, pcap_geterr(devHandler));
+		return enif_make_tuple(env, 2, enif_make_atom(env, "error"), enif_make_string(env, err_str, ERL_NIF_LATIN1));
+	}
+
+	return enif_make_atom(env, "ok");
+}
+
+static ERL_NIF_TERM close_nif(ErlNifEnv* env, int argc, const ERL_NIF_TERM argv[])
+{
+	pcap_close(devHandler);
+		
+	return enif_make_atom(env, "ok");
+}
 
 static ErlNifFunc nif_funcs[] = {
-    {"foo", 1, foo_nif},
-    {"bar", 1, bar_nif},
 	{"lookup", 0, lookup_nif},
-	{"lookup_device_name", 1, lookup_device_name_nif},
 	{"opendevice", 1, opendevice_nif},
-	{"capture", 0, capture_nif}
+	{"capture", 0, capture_nif},
+	{"setfilter", 1, setfilter_nif },
+	{"close", 0, close_nif}
 };
 
-ERL_NIF_INIT(erpcap, nif_funcs, NULL, NULL, NULL, NULL)
+ERL_NIF_INIT(icerlpcap, nif_funcs, NULL, NULL, NULL, NULL)
